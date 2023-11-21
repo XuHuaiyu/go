@@ -1686,7 +1686,7 @@ func traceHeapAlloc(live uint64) {
 }
 
 func traceHeapGoal() {
-	heapGoal := gcController.heapGoal()
+	heapGoal := gcController.heapGoal(false)
 	if heapGoal == ^uint64(0) {
 		// Heap-based triggering is disabled.
 		traceEvent(traceEvHeapGoal, -1, 0)

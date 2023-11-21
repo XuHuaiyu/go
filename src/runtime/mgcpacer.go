@@ -454,7 +454,7 @@ func (c *gcControllerState) startCycle(markStartTime int64, procs int, trigger g
 	c.revise()
 
 	if debug.gcpacertrace > 0 {
-		heapGoal := c.heapGoal()
+		heapGoal := c.heapGoal(false)
 		assistRatio := c.assistWorkPerByte.Load()
 		print("pacer: assist ratio=", assistRatio,
 			" (scan ", gcController.heapScan.Load()>>20, " MB in ",
@@ -500,7 +500,7 @@ func (c *gcControllerState) revise() {
 
 	// Assume we're under the soft goal. Pace GC to complete at
 	// heapGoal assuming the heap is in steady-state.
-	heapGoal := int64(c.heapGoal())
+	heapGoal := int64(c.heapGoal(false))
 
 	// The expected scan work is computed as the amount of bytes scanned last
 	// GC cycle (both heap and stack), plus our estimate of globals work for this cycle.
@@ -598,7 +598,7 @@ func (c *gcControllerState) revise() {
 func (c *gcControllerState) endCycle(now int64, procs int, userForced bool) {
 	// Record last heap goal for the scavenger.
 	// We'll be updating the heap goal soon.
-	gcController.lastHeapGoal = c.heapGoal()
+	gcController.lastHeapGoal = c.heapGoal(true)
 
 	// Compute the duration of time for which assists were turned on.
 	assistDuration := now - c.markStartTime
@@ -891,8 +891,8 @@ func (c *gcControllerState) addGlobals(amount int64) {
 }
 
 // heapGoal returns the current heap goal.
-func (c *gcControllerState) heapGoal() uint64 {
-	goal, _ := c.heapGoalInternal()
+func (c *gcControllerState) heapGoal(isEndCycle bool) uint64 {
+	goal, _ := c.heapGoalInternal(isEndCycle)
 	return goal
 }
 
@@ -900,12 +900,17 @@ func (c *gcControllerState) heapGoal() uint64 {
 // information that is necessary for computing the trigger.
 //
 // The returned minTrigger is always <= goal.
-func (c *gcControllerState) heapGoalInternal() (goal, minTrigger uint64) {
+func (c *gcControllerState) heapGoalInternal(isEndCycle bool) (goal, minTrigger uint64) {
 	// Start with the goal calculated for gcPercent.
 	goal = c.gcPercentHeapGoal.Load()
 
+	newGoal := c.memoryLimitHeapGoal(isEndCycle)
+
+	if isEndCycle {
+		print("newGoal: ", newGoal, " goal:", goal, "\n")
+	}
 	// Check if the memory-limit-based goal is smaller, and if so, pick that.
-	if newGoal := c.memoryLimitHeapGoal(); newGoal < goal {
+	if newGoal < goal {
 		goal = newGoal
 	} else {
 		// We're not limited by the memory limit goal, so perform a series of
@@ -941,12 +946,15 @@ func (c *gcControllerState) heapGoalInternal() (goal, minTrigger uint64) {
 		if c.triggered != ^uint64(0) && goal < c.triggered+minRunway {
 			goal = c.triggered + minRunway
 		}
+		if isEndCycle {
+			print("goal: ", goal, " minTrigger", minTrigger, " c.triggered", c.triggered, " minRunway", minRunway, "\n")
+		}
 	}
 	return
 }
 
 // memoryLimitHeapGoal returns a heap goal derived from memoryLimit.
-func (c *gcControllerState) memoryLimitHeapGoal() uint64 {
+func (c *gcControllerState) memoryLimitHeapGoal(isEndCycle bool) uint64 {
 	// Start by pulling out some values we'll need. Be careful about overflow.
 	var heapFree, heapAlloc, mappedReady uint64
 	for {
@@ -1028,6 +1036,11 @@ func (c *gcControllerState) memoryLimitHeapGoal() uint64 {
 		overage = mappedReady - memoryLimit
 	}
 
+	if isEndCycle {
+		print("memoryLimit: ", memoryLimit, " heapFree: ", heapFree, " heapAlloc: ", heapAlloc, " mappedReady: ", mappedReady,
+		 " nonHeapMemory:", nonHeapMemory, " overage:", overage, " nonHeapMemory + overage:", nonHeapMemory + overage,
+		  " nonHeapMemory+overage >= memoryLimit:", nonHeapMemory+overage >= memoryLimit, " memoryLimit - (nonHeapMemory + overage):", memoryLimit - (nonHeapMemory + overage), "\n")
+	}
 	if nonHeapMemory+overage >= memoryLimit {
 		// We're at a point where non-heap memory exceeds the memory limit on its own.
 		// There's honestly not much we can do here but just trigger GCs continuously
@@ -1089,7 +1102,7 @@ const (
 // not be, in the case of small movements for efficiency) checked whenever
 // the heap goal may change.
 func (c *gcControllerState) trigger() (uint64, uint64) {
-	goal, minTrigger := c.heapGoalInternal()
+	goal, minTrigger := c.heapGoalInternal(false)
 
 	// Invariant: the trigger must always be less than the heap goal.
 	//
@@ -1305,6 +1318,9 @@ func (c *gcControllerState) setMemoryLimit(in int64) int64 {
 //go:linkname setMemoryLimit runtime/debug.setMemoryLimit
 func setMemoryLimit(in int64) (out int64) {
 	// Run on the system stack since we grab the heap lock.
+	var sbuf [24]byte
+	print(" @", string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ")	
+	print("[before] trying to set memory limit to ", in, "\n")
 	systemstack(func() {
 		lock(&mheap_.lock)
 		out = gcController.setMemoryLimit(in)
@@ -1316,6 +1332,8 @@ func setMemoryLimit(in int64) (out int64) {
 		}
 		gcControllerCommit()
 		unlock(&mheap_.lock)
+		print(" @", string(itoaDiv(sbuf[:], uint64(work.tSweepTerm-runtimeInitTime)/1e6, 3)), "s ")	
+		print("[after] setMemoryLimit: setting to ", in, " from ", out, "\n")
 	})
 	return out
 }

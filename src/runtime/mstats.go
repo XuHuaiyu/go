@@ -439,7 +439,7 @@ func readmemstats_m(stats *MemStats) {
 		memstats.buckhash_sys.load() + memstats.gcMiscSys.load() + memstats.other_sys.load() +
 		stackInUse + gcWorkBufInUse + gcProgPtrScalarBitsInUse
 
-	heapGoal := gcController.heapGoal()
+	heapGoal := gcController.heapGoal(false)
 
 	// The world is stopped, so the consistent stats (after aggregation)
 	// should be identical to some combination of memstats. In particular:

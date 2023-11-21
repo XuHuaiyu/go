@@ -1185,7 +1185,7 @@ func gcMarkTermination() {
 	}
 
 	// Enable huge pages on some metadata if we cross a heap threshold.
-	if gcController.heapGoal() > minHeapForMetadataHugePages {
+	if gcController.heapGoal(false) > minHeapForMetadataHugePages {
 		mheap_.enableMetadataHugePages()
 	}
 
